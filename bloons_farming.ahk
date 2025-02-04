@@ -162,8 +162,9 @@ press(key:=false) {
     global hotkey_dict
     global TargetMonkey
     global InputDelay
-    if !key
+    if (!key) {
         key := hotkey_dict[TargetMonkey]
+    }
     SendInput %key%
     Sleep InputDelay
     return
@@ -215,7 +216,7 @@ Gui, Add, Tab3,, Control|Tracking|Help|
 Gui, Tab, 1 ; Control
 Gui, Add, GroupBox, Section w200 h170, Options
 Gui, Add, Text, xp+10 yp+18, Target Monkey:
-Gui, Add, DropDownList, vTargetMonkey, Dart|Boomerang|Bomb|Tack|Ice|Glue|Sniper|Mortar|Dartling|Wizard|Super|Ninja|Alchemist|Druid|Mermonkey|Spike|Village|Engineer|Handler
+Gui, Add, DropDownList, vTargetMonkey, Dart|Boomerang|Bomb|Tack|Ice|Glue|Sniper|Sub|Buccaneer|Ace|Mortar|Dartling|Wizard|Super|Ninja|Alchemist|Druid|Mermonkey|Spike|Village|Engineer|Handler
 GuiControl, ChooseString, TargetMonkey, %TargetMonkey%
 Gui, Add, Text,, Strategy:
 Gui, Add, DropDownList, vStrategy, Heli|Sniper
@@ -248,6 +249,12 @@ InputDelay := BaseInputDelay * (1+ExtraDelay)
 TransitionDelay := BaseTransitionDelay * (1+ExtraDelay)
 BTDFGuiClose:
 Gui, BTDF:Destroy
+global WaterMonkeyTarget
+if (TargetMonkey = "sub" or TargetMonkey = "buccaneer") {
+    WaterMonkeyTarget := true
+} else {
+    WaterMonkeyTarget := false 
+}
 menuOpen := false
 Sleep 250
 if (toggleText="On") {
@@ -333,8 +340,13 @@ while (toggle) {
             pressStream(",,,..")
             clickHere(0, 0)
             press()                                ; place target monkey
-            clickHere(835, 745)
-            clickHere(835, 745)
+            if (WaterMonkeyTarget) {
+                clickHere(482, 867)
+                clickHere(482, 867)
+            } else {
+                clickHere(835, 745)
+                clickHere(835, 745)
+            }
         }
         if (Strategy="Sniper") {
             press("k")                          ; place village
@@ -353,8 +365,13 @@ while (toggle) {
             pressStream(",,,/")
             clickHere(0, 0)
             press()                                ; place target monkey
-            clickHere(110, 560)
-            clickHere(110, 560)
+            if (WaterMonkeyTarget) {
+                clickHere(482, 867)
+                clickHere(482, 867)
+            } else {
+                clickHere(110, 560)
+                clickHere(110, 560)
+            }
         }
         pressStream(",./,./,./,./,./,./")
         clickHere(30, 0)
@@ -402,12 +419,21 @@ while (toggle) {
         }
         if (step=3) {                           ; STEP 3: LOAD HOME SCREEN
             color := 0
+            step3StartTime := A_TickCount
+            setStepTo1 := true
             while (!nearColor(color, 0xffffff) and toggle and !menuOpen) {    ; wait for home screen
                 tt("Waiting for menu...")
                 color := colorHere(830, 930)
                 Sleep InputDelay
+                if (A_TickCount - step3StartTime > 5000) {
+                    step := 2
+                    setStepTo1 := false 
+                    break ; go back to step 2 if we failed to get to home screen for over 5 seconds
+                }
             }
-            step := 1
+            if (setStepTo1) {
+                step := 1
+            }
         }
     }
 }
