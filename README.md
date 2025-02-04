@@ -63,7 +63,6 @@ Newer, may lose some lives but has more leftover cash for XP monkey
         - [Tutorial](https://youtu.be/WVw36Pxh0GI?feature=shared)
 - Mermonkey hotkey is unset by default, **set it to the previously unused "o" key for the script to work**
     - Default being unset is likely due to the other default hotkey assignments not leaving space for Mermonkey to be assigned beside the other magic monkeys
-- Due to issue https://github.com/gavboi/btd6-farming/issues/1, the script will need to be babysat while the tower is unlocking the initial upgrades
 
 ### Full Controls
 

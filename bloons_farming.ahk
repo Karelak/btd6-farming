@@ -374,6 +374,8 @@ while (toggle) {
             }
         }
         pressStream(",./,./,./,./,./,./")
+        Sleep TransitionDelay
+        clickHere(84, 94) ; close upgrade screen
         clickHere(30, 0)
         press("{Space}")                        ; start
         press("{Space}")                        ; speed up
