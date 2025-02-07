@@ -297,7 +297,7 @@ while (toggle) {
     if (step=1) {                                ; STEP 1.1: MENU
         Hotkey, ^m, Off
         tt("Starting round...")
-        clickHere(835, 935)                        ; click play
+        clickHere(953, 983)                        ; click play
         Sleep TransitionDelay
         clickHere(1340, 975)                    ; click expert maps
         Sleep TransitionDelay
@@ -423,9 +423,9 @@ while (toggle) {
             color := 0
             step3StartTime := A_TickCount
             setStepTo1 := true
-            while (!nearColor(color, 0xffffff) and toggle and !menuOpen) {    ; wait for home screen
+            while (!nearColor(color, 0x00E5FF) and toggle and !menuOpen) {    ; wait for home screen
                 tt("Waiting for menu...")
-                color := colorHere(830, 930)
+                color := colorHere(737, 863)
                 Sleep InputDelay
                 if (A_TickCount - step3StartTime > 5000) {
                     step := 2
