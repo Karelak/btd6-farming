@@ -198,6 +198,10 @@ Gui, Add, Text,, currentScriptState: %currentScriptState%
 Gui, Add, Text,, actionDelayMs: %actionDelayMs%
 Gui, Add, Text,, screenTransitionDelayMs: %screenTransitionDelayMs%
 Gui, Add, Text,, isMenuGuiOpen: %isMenuGuiOpen%
+Gui, Add, Text,, windowOffsetX: %windowOffsetX%
+Gui, Add, Text,, windowOffsetY: %windowOffsetY%
+Gui, Add, Text,, gameClientWidth: %gameClientWidth%
+Gui, Add, Text,, gameClientHeight: %gameClientHeight%
 Gui, Debug:Show
 return
 
@@ -210,15 +214,7 @@ isMenuGuiOpen := true
 Gosub updateScreenCoordinates
 scriptStatusText := isScriptRunning ? "On" : "Off"
 fullscreenStatusText := isFullscreen ? "Yes" : "No"
-estimatedXpEarned := 57000 * completedGamesCount
-estimatedMoneyEarned := 66 * completedGamesCount
-currentRuntime := totalRuntimeSeconds
-if (isScriptRunning) {
-    currentRuntime := totalRuntimeSeconds + (A_TickCount - currentRunStartTime) / 1000
-}
-totalMinutes := Floor(currentRuntime / 60)
-remainingSeconds := Mod(currentRuntime, 60)
-formattedRuntime := totalMinutes . "min " . Round(remainingSeconds, 1) . "s"
+UpdateTrackingStats()
 ; create menu
 Gui, BTDF:New,, %scriptWindowTitle%
 Gui, Font, s10, Courier
@@ -235,13 +231,13 @@ Gui, Add, CheckBox, Checked%useExtraDelay% vUseExtraDelay, Extra Delay
 Gui, Add, Button, gSaveButton xp ym+220 Default w80, &Save
 Gui, Add, Button, gExitButton x+m yp w80, E&xit
 Gui, Tab, 2 ; Tracking
-Gui, Add, Text,, Window Size : %gameClientWidth%x%gameClientHeight%
-Gui, Add, Text, y+m, Fullscreen : %fullscreenStatusText%
-Gui, Add, Text,, Games Played : %completedGamesCount%
-Gui, Add, Text, y+m, Runtime : %formattedRuntime%
-Gui, Add, Text, y+m, XP Estimate : %estimatedXpEarned%
-Gui, Add, Text, y+m, Level Ups : %levelUpsCount%
-Gui, Add, Text, y+m, Money Estimate : %estimatedMoneyEarned%
+Gui, Add, Text, vWindowSizeText, Window Size : %gameClientWidth%x%gameClientHeight%
+Gui, Add, Text, y+m vFullscreenText, Fullscreen : %fullscreenStatusText%
+Gui, Add, Text, vGamesPlayedText, Games Played : %completedGamesCount%
+Gui, Add, Text, y+m vRuntimeText, Runtime : %formattedRuntime%
+Gui, Add, Text, y+m vXPEstimateText, XP Estimate : %estimatedXpEarned%
+Gui, Add, Text, y+m vLevelUpsText, Level Ups : %levelUpsCount%
+Gui, Add, Text, y+m vMoneyEstimateText, Money Estimate : %estimatedMoneyEarned%
 Gui, Tab, 3 ; Help
 Gui, Add, Text,, Ctrl+M : This menu
 Gui, Add, Text, y+m, Ctrl+S : Start (when menu closed)
@@ -250,6 +246,42 @@ Gui, Add, Text,, 'Save' closes GUI and keeps `nchanges, 'X' closes without `ncha
 Gui, Add, Text,, All Strategies require Infernal `nDeflation unlocked
 Gui, Add, Link, cgray, Detailed instructions on <a href="https://github.com/gavboi/btd6-farming">github</a>
 Gui, Show
+; I have no idea how to get this refresh to work if anyone ever figures it out would be great
+; Start update timer for the tracking tab
+SetTimer, UpdateTrackingDisplay, 1000  ; Update every second
+return
+
+; New function to calculate tracking statistics
+UpdateTrackingStats() {
+    global completedGamesCount, levelUpsCount, totalRuntimeSeconds
+    global currentRunStartTime, isScriptRunning, formattedRuntime
+    global estimatedXpEarned, estimatedMoneyEarned
+    
+    estimatedXpEarned := 57000 * completedGamesCount
+    estimatedMoneyEarned := 66 * completedGamesCount
+    currentRuntime := totalRuntimeSeconds
+    if (isScriptRunning) {
+        currentRuntime := totalRuntimeSeconds + (A_TickCount - currentRunStartTime) / 1000
+    }
+    totalMinutes := Floor(currentRuntime / 60)
+    remainingSeconds := Mod(currentRuntime, 60)
+    formattedRuntime := totalMinutes . "min " . Round(remainingSeconds, 1) . "s"
+    return
+}
+
+; Timer function to update tracking display when menu is open
+UpdateTrackingDisplay:
+if (!isMenuGuiOpen)
+{
+    SetTimer, UpdateTrackingDisplay, Off
+    return
+}
+UpdateTrackingStats()
+GuiControl,, GamesPlayedText, Games Played : %completedGamesCount%
+GuiControl,, RuntimeText, Runtime : %formattedRuntime%
+GuiControl,, XPEstimateText, XP Estimate : %estimatedXpEarned%
+GuiControl,, LevelUpsText, Level Ups : %levelUpsCount%
+GuiControl,, MoneyEstimateText, Money Estimate : %estimatedMoneyEarned%
 return
 
 ; Update variables based on menu settings
@@ -258,6 +290,8 @@ Gui, Submit
 actionDelayMs := baseActionDelayMs * (1 + useExtraDelay)
 screenTransitionDelayMs := baseScreenTransitionDelayMs * (1 + useExtraDelay)
 BTDFGuiClose:
+; Turn off the tracking update timer
+SetTimer, UpdateTrackingDisplay, Off
 Gui, BTDF:Destroy
 ; Update water monkey flag based on selection
 if (selectedTargetMonkey = "sub" or selectedTargetMonkey = "buccaneer") {
@@ -519,7 +553,28 @@ while (isScriptRunning) {
         homeScreenLoaded := false
         playButtonVisible := false
         while (!homeScreenLoaded and isScriptRunning and !isMenuGuiOpen and (A_TickCount - homeScreenWaitStartTime < 5000)) { ; 5 sec timeout
-            ; Check only for the specific Play button color
+            ; Check for event screen first
+            eventCheck1 := getColorAt(969, 582)
+            eventCheck2 := getColorAt(1765, 932)
+            eventCheck3 := getColorAt(1722, 70)
+            
+            isEventColor1Match := isNearColor(eventCheck1, 0x42789F)  ; Converting RGB(9F,78,42) to BGR
+            isEventColor2Match := isNearColor(eventCheck2, 0x00ED65)  ; Converting RGB(65,ED,00) to BGR
+            isEventColor3Match := isNearColor(eventCheck3, 0x0023DC)  ; Converting RGB(DC,23,00) to BGR
+            
+            ; If all three event colors are detected, we're in an event screen
+            if (isEventColor1Match and isEventColor2Match and isEventColor3Match) {
+                updateTooltip("Event screen detected! Clicking back button...")
+                Hotkey, ^m, Off ; Disable menu hotkey during automation
+                clickAt(110, 58)  ; Click back button (color #00D4FF in RGB / #FFD400 in BGR)
+                Sleep screenTransitionDelayMs * 2  ; Extra delay for transition
+                Hotkey, ^m, On ; Re-enable menu hotkey
+                ; Reset the timeout timer since we took action
+                homeScreenWaitStartTime := A_TickCount
+                continue  ; Skip the rest of this iteration and check again
+            }
+            
+            ; Check for the specific Play button color
             playButtonColor := getColorAt(965, 899) ; Check for Play button green
 
             if (isNearColor(playButtonColor, 0x00F066)) { ; (66F000 RGB -> 00F066 BGR)
