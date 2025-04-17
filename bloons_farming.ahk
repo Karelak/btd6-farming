@@ -8,27 +8,35 @@ SendMode Input
 SetWorkingDir %A_ScriptDir%
 SetTitleMatchMode 2
 
+; ------------------------- State Constants
+STATE_MENU_NAV := 1
+STATE_IN_GAME := 2
+STATE_POST_GAME_VICTORY := 3
+STATE_POST_GAME_DEFEAT := 4
+STATE_WAIT_HOME := 5
+
 ; ------------------------- Variables
-toggle := false
-menuOpen := false
-step := 1
+isScriptRunning := false
+isMenuGuiOpen := false
+currentScriptState := STATE_MENU_NAV ; Start with menu navigation
 
-xsh := 0
-ysh := 0
-width := 1920
-height := 1080
-full := false
+windowOffsetX := 0
+windowOffsetY := 0
+gameClientWidth := 1920
+gameClientHeight := 1080
+isFullscreen := false
 
-games := 0
-lvls := 0
-totalTime := 0
-timeStart := 0
-timeEnd := 0
+completedGamesCount := 0
+levelUpsCount := 0
+totalRuntimeSeconds := 0
+currentRunStartTime := 0
+currentRunEndTime := 0
 
-TargetMonkey := "dart"
-Strategy := "heli"
+selectedTargetMonkey := "dart"
+selectedStrategy := "heli"
+isTargetMonkeyWaterBased := false ; Will be set later based on selectedTargetMonkey
 
-hotkey_dict := {"dart": "q"
+monkeyHotkeys := {"dart": "q"
     , "boomerang": "w"
     , "bomb": "e"
     , "tack": "r"
@@ -54,184 +62,186 @@ hotkey_dict := {"dart": "q"
     , "handler": "i"
     , "hero": "u"}
 
-InputDelay := 150
-BaseInputDelay := 150
-TransitionDelay := 500
-BaseTransitionDelay := 500
-ExtraDelay := 0
-ThisTitle := "Bloons Tower Defense 6 Farming"
-GameTitle := "BloonsTD6" 
+baseActionDelayMs := 150
+actionDelayMs := baseActionDelayMs
+baseScreenTransitionDelayMs := 500
+screenTransitionDelayMs := baseScreenTransitionDelayMs
+useExtraDelay := false
+scriptWindowTitle := "Bloons Tower Defense 6 Farming"
+gameWindowTitle := "BloonsTD6"
 
 ; ------------------------- Hotkeys
-Hotkey, IfWinActive, %GameTitle%
-Hotkey, ^m, menu
-Hotkey, ^s, start
-Hotkey, ^d, debug, Off
+Hotkey, IfWinActive, %gameWindowTitle%
+Hotkey, ^m, menuHandler ; Renamed label
+Hotkey, ^s, startFarming ; Renamed label
+Hotkey, ^d, debugHandler, Off ; Renamed label
 
 ; ============================== Functions
 ; Startup message
-MsgBox, , %ThisTitle%, %A_ScriptName% started... Ctrl+M for menu, 5
-SetTimer, checkActive, 500
+MsgBox, , %scriptWindowTitle%, %A_ScriptName% started... Ctrl+M for menu, 5
+SetTimer, checkGameWindowActive, 500 ; Renamed label
 return
 
 ; Pause main loop
-turnOff:
-if (toggle) {
-    timeEnd := A_TickCount
-    totalTime := totalTime + (timeEnd - timeStart) / 1000
-    tt("Functions stopped.")
+stopFarming: ; Renamed label
+if (isScriptRunning) {
+    currentRunEndTime := A_TickCount
+    totalRuntimeSeconds := totalRuntimeSeconds + (currentRunEndTime - currentRunStartTime) / 1000
+    updateTooltip("Functions stopped.")
 }
-toggle := false
+isScriptRunning := false
 return
 
-; When windowed, game is 18 pixels wider and 47 pixels higher (9 on all sides,
-; except top which is 38). Therefore, the offset from the top and from left
-; must be added to correct a non-fullscreen game's mouse coordinates. The
-; correct game resolution can also be achieved by subtracting the 
-; aforementioned values from GetWinPos.
-scaling:
-WinGetPos, , , width, height, %GameTitle%
-t := Mod(height, 10)
-if (t = 0 || t = 4 || t = 8) {
-    xsh := 0
-    ysh := 0
-    full := true
-} else {
-    xsh := 9
-    ysh := 38
-    width := width - 18
-    height := height - 47
-    full := false
+; Adjust coordinates based on windowed/fullscreen mode
+updateScreenCoordinates: ; Renamed label
+WinGetPos, , , currentWidth, currentHeight, %gameWindowTitle%
+remainder := Mod(currentHeight, 10)
+if (remainder = 0 || remainder = 4 || remainder = 8) { ; Heuristic for fullscreen
+    windowOffsetX := 0
+    windowOffsetY := 0
+    gameClientWidth := currentWidth
+    gameClientHeight := currentHeight
+    isFullscreen := true
+} else { ; Assume windowed with title bar/borders
+    windowOffsetX := 9
+    windowOffsetY := 38
+    gameClientWidth := currentWidth - 18
+    gameClientHeight := currentHeight - 47
+    isFullscreen := false
 }
 return
 
 ; Show status message in top corner
-tt(msg) {
-    Tooltip, %msg%, 50, 50
-    SetTimer, removeTooltip, -2000
+updateTooltip(message, timeoutMs := 2000) {
+    global gameStatusMessage, statusUpdateTime
+    
+    ; Update status variables for potential persistent display
+    gameStatusMessage := message
+    statusUpdateTime := A_TickCount
+    
+    ; Format the tooltip with timing information if it's a major state change
+    formattedMessage := message
+    
+    ; Display the tooltip
+    Tooltip, % formattedMessage, 50, 50
+    SetTimer, removeTooltip, -%timeoutMs%
+    return
 }
-return
 
 removeTooltip:
 Tooltip
 return
 
 ; Click at location, normalised with delay added
-clickHere(x, y) {
-    global InputDelay
-    global xsh
-    global ysh
-    global width
-    global height
-    x := (x * width // 1920) + xsh
-    y := (y * height // 1080) + ysh
-    Click, %x% %y%
-    Sleep InputDelay
+clickAt(x, y) {
+    global actionDelayMs
+    global windowOffsetX
+    global windowOffsetY
+    global gameClientWidth
+    global gameClientHeight
+    scaledX := (x * gameClientWidth // 1920) + windowOffsetX
+    scaledY := (y * gameClientHeight // 1080) + windowOffsetY
+    Click, %scaledX% %scaledY%
+    Sleep actionDelayMs
     return
 }
 
 ; Get colour at location, normalised
-colorHere(x, y) {
-    global xsh
-    global ysh
-    global width
-    global height
-    x := (x * width // 1920) + xsh
-    y := (y * height // 1080) + ysh
-    PixelGetColor, color, x, y
-    return color
+getColorAt(x, y) { ; Renamed function
+    global windowOffsetX
+    global windowOffsetY
+    global gameClientWidth
+    global gameClientHeight
+    scaledX := (x * gameClientWidth // 1920) + windowOffsetX
+    scaledY := (y * gameClientHeight // 1080) + windowOffsetY
+    PixelGetColor, pixelColor, scaledX, scaledY ; Renamed variable
+    return pixelColor
 }
 
-; Check for colour equivalence under threshold - by user "colt" on ahk wiki
-nearColor(test, target) { 
-    tolerance := 10
-    tb := format("{:d}", "0x" . substr(test,3,2))
-    tg := format("{:d}", "0x" . substr(test,5,2))
-    tr := format("{:d}", "0x" . substr(test,7,2))
-    b := format("{:d}", "0x" . substr(target,3,2))
-    g := format("{:d}", "0x" . substr(target,5,2))
-    r := format("{:d}", "0x" . substr(target,7,2))
-    distance := sqrt((b-tb)**2+(g-tg)**2+(r-tr)**2)
-    if(distance<tolerance)
-        return true
-    return false
+; Check for colour equivalence under threshold
+isNearColor(testColor, targetColor, tolerance := 10) { ; Renamed function and parameters
+    testBlue := format("{:d}", "0x" . substr(testColor,3,2))
+    testGreen := format("{:d}", "0x" . substr(testColor,5,2))
+    testRed := format("{:d}", "0x" . substr(testColor,7,2))
+    targetBlue := format("{:d}", "0x" . substr(targetColor,3,2))
+    targetGreen := format("{:d}", "0x" . substr(targetColor,5,2))
+    targetRed := format("{:d}", "0x" . substr(targetColor,7,2))
+    distance := sqrt((targetBlue-testBlue)**2+(targetGreen-testGreen)**2+(targetRed-targetRed)**2)
+    return (distance < tolerance)
 }
 
 ; Press key, with delay added
-press(key:=false) {
-    global hotkey_dict
-    global TargetMonkey
-    global InputDelay
+pressKey(key:=false) { ; Renamed function
+    global monkeyHotkeys
+    global selectedTargetMonkey
+    global actionDelayMs
     if (!key) {
-        key := hotkey_dict[TargetMonkey]
+        key := monkeyHotkeys[selectedTargetMonkey]
     }
     SendInput %key%
-    Sleep InputDelay
+    Sleep actionDelayMs
     return
 }
 
 ; Press keys in sequence, with delay added
-pressStream(keys) {
-    k := StrSplit(keys)
-    for c in StrSplit(keys)
-        press(k[c])
+pressKeyStream(keys) { ; Renamed function
+    for index, keyChar in StrSplit(keys) ; Improved loop
+        pressKey(keyChar)
     return
 }
 
-debug:
+debugHandler: ; Renamed label
 Gui, Debug:New,, Variables snapshot
 Gui, Font, s10, Courier
-Gui, Add, Text,, toggle:%toggle%
-Gui, Add, Text,, step:%step%
-Gui, Add, Text,, color:%color%
-Gui, Add, Text,, InputDelay:%InputDelay%
-Gui, Add, Text,, TransitionDelay:%TransitionDelay%
-Gui, Add, Text,, menuOpen:%menuOpen%
+Gui, Add, Text,, isScriptRunning: %isScriptRunning%
+Gui, Add, Text,, currentScriptState: %currentScriptState%
+Gui, Add, Text,, actionDelayMs: %actionDelayMs%
+Gui, Add, Text,, screenTransitionDelayMs: %screenTransitionDelayMs%
+Gui, Add, Text,, isMenuGuiOpen: %isMenuGuiOpen%
 Gui, Debug:Show
 return
 
 
 ; ------------------------- Menu
 ; Options and information window
-menu:
-menuOpen := true
+menuHandler: ; Renamed label
+isMenuGuiOpen := true
 ; calculate needed information
-Gosub scaling
-toggleText := toggle ? "On" : "Off"
-fullText := full ? "Yes" : "No"
-XPCount := 57000*games
-moneyCount := 66*games
-if (toggle) {
-    t := totalTime + (A_TickCount - timeStart) / 1000
-} else {
-    t := totalTime
+Gosub updateScreenCoordinates
+scriptStatusText := isScriptRunning ? "On" : "Off"
+fullscreenStatusText := isFullscreen ? "Yes" : "No"
+estimatedXpEarned := 57000 * completedGamesCount
+estimatedMoneyEarned := 66 * completedGamesCount
+currentRuntime := totalRuntimeSeconds
+if (isScriptRunning) {
+    currentRuntime := totalRuntimeSeconds + (A_TickCount - currentRunStartTime) / 1000
 }
-tm := Floor(t / 60)
-ts := Mod(t, 60)
-timeText := tm . "min " . Round(ts, 1) . "s"
+totalMinutes := Floor(currentRuntime / 60)
+remainingSeconds := Mod(currentRuntime, 60)
+formattedRuntime := totalMinutes . "min " . Round(remainingSeconds, 1) . "s"
 ; create menu
-Gui, BTDF:New,, %ThisTitle%
+Gui, BTDF:New,, %scriptWindowTitle%
 Gui, Font, s10, Courier
 Gui, Add, Tab3,, Control|Tracking|Help|
 Gui, Tab, 1 ; Control
 Gui, Add, GroupBox, Section w200 h170, Options
 Gui, Add, Text, xp+10 yp+18, Target Monkey:
-Gui, Add, DropDownList, vTargetMonkey, Dart|Boomerang|Bomb|Tack|Ice|Glue|Sniper|Sub|Buccaneer|Ace|Mortar|Dartling|Wizard|Super|Ninja|Alchemist|Druid|Mermonkey|Spike|Village|Engineer|Handler
-GuiControl, ChooseString, TargetMonkey, %TargetMonkey%
+Gui, Add, DropDownList, vSelectedTargetMonkey, Dart|Boomerang|Bomb|Tack|Ice|Glue|Sniper|Sub|Buccaneer|Ace|Mortar|Dartling|Wizard|Super|Ninja|Alchemist|Druid|Mermonkey|Spike|Village|Engineer|Handler
+GuiControl, ChooseString, SelectedTargetMonkey, %selectedTargetMonkey%
 Gui, Add, Text,, Strategy:
-Gui, Add, DropDownList, vStrategy, Heli|Sniper
-GuiControl, ChooseString, Strategy, %Strategy%
-Gui, Add, CheckBox, Checked%ExtraDelay% vExtraDelay, Extra Delay
+Gui, Add, DropDownList, vSelectedStrategy, Heli|Sniper
+GuiControl, ChooseString, SelectedStrategy, %selectedStrategy%
+Gui, Add, CheckBox, Checked%useExtraDelay% vUseExtraDelay, Extra Delay
 Gui, Add, Button, gSaveButton xp ym+220 Default w80, &Save
 Gui, Add, Button, gExitButton x+m yp w80, E&xit
 Gui, Tab, 2 ; Tracking
-Gui, Add, Text,, Window Size : %width%x%height%
-Gui, Add, Text, y+m, Fullscreen : %fullText%
-Gui, Add, Text,, Games Played : %games%
-Gui, Add, Text, y+m, Runtime : %timeText%
-Gui, Add, Text, y+m, XP Estimate : %XPCount%
-Gui, Add, Text, y+m, Level Ups : %lvls%
-Gui, Add, Text, y+m, Money Estimate : %moneyCount%
+Gui, Add, Text,, Window Size : %gameClientWidth%x%gameClientHeight%
+Gui, Add, Text, y+m, Fullscreen : %fullscreenStatusText%
+Gui, Add, Text,, Games Played : %completedGamesCount%
+Gui, Add, Text, y+m, Runtime : %formattedRuntime%
+Gui, Add, Text, y+m, XP Estimate : %estimatedXpEarned%
+Gui, Add, Text, y+m, Level Ups : %levelUpsCount%
+Gui, Add, Text, y+m, Money Estimate : %estimatedMoneyEarned%
 Gui, Tab, 3 ; Help
 Gui, Add, Text,, Ctrl+M : This menu
 Gui, Add, Text, y+m, Ctrl+S : Start (when menu closed)
@@ -245,21 +255,21 @@ return
 ; Update variables based on menu settings
 SaveButton:
 Gui, Submit
-InputDelay := BaseInputDelay * (1+ExtraDelay)
-TransitionDelay := BaseTransitionDelay * (1+ExtraDelay)
+actionDelayMs := baseActionDelayMs * (1 + useExtraDelay)
+screenTransitionDelayMs := baseScreenTransitionDelayMs * (1 + useExtraDelay)
 BTDFGuiClose:
 Gui, BTDF:Destroy
-global WaterMonkeyTarget
-if (TargetMonkey = "sub" or TargetMonkey = "buccaneer") {
-    WaterMonkeyTarget := true
+; Update water monkey flag based on selection
+if (selectedTargetMonkey = "sub" or selectedTargetMonkey = "buccaneer") {
+    isTargetMonkeyWaterBased := true
 } else {
-    WaterMonkeyTarget := false 
+    isTargetMonkeyWaterBased := false
 }
-menuOpen := false
+isMenuGuiOpen := false
 Sleep 250
-if (toggleText="On") {
-    tt("Functions resumed.")
-    Gosub start
+if (scriptStatusText="On") { ; Check the status *before* the menu opened
+    updateTooltip("Functions resumed.")
+    Gosub startFarming
 }
 return
 
@@ -267,176 +277,276 @@ return
 ; Stop script, or close script if already stopped
 ^x::
 ExitButton:
-if toggle {
-    Hotkey, ^m, On
-    step := 1
-    Gosub turnOff
+if isScriptRunning {
+    Hotkey, ^m, On ; Re-enable menu hotkey if script was running
+    currentScriptState := STATE_MENU_NAV ; Reset state
+    Gosub stopFarming
 } else {
-    MsgBox, 17, %ThisTitle%, Exit %A_ScriptName%?,
+    MsgBox, 17, %scriptWindowTitle%, Exit %A_ScriptName%?,
     IfMsgBox, OK
         ExitApp
-    MsgBox, , %ThisTitle%, Script continuing..., 1
+    MsgBox, , %scriptWindowTitle%, Script continuing..., 1
 }
 return
 
 ; ------------------------- Disable on unactive
 ; Stop script to avoid click checks if game/menu isn't active
-checkActive:
-if (!WinActive(GameTitle)) { 
-    Gosub turnOff
+checkGameWindowActive: ; Renamed label
+if (!WinActive(gameWindowTitle)) {
+    Gosub stopFarming
 }
 return
 
 ; ------------------------- Start farming
 ; Main loop
-start:
-Gosub scaling
-toggle := true
-timeStart := A_TickCount
-while (toggle) {
-    if (step=1) {                                ; STEP 1.1: MENU
-        Hotkey, ^m, Off
-        tt("Starting round...")
-        clickHere(953, 983)                        ; click play
-        Sleep TransitionDelay
-        clickHere(1340, 975)                    ; click expert maps
-        Sleep TransitionDelay
-        clickHere(1460, 580)                    ; click infernal
-        Sleep TransitionDelay
-        clickHere(625, 400)                        ; click easy
-        Sleep TransitionDelay
-        clickHere(1290, 445)                    ; click deflation
-        Sleep TransitionDelay
-        clickHere(1100, 720)                    ; try and click overwrite
-                                                ; STEP 1.2: WAIT FOR LOAD
-        color := 0
-        while (!nearColor(color, 0x00e15d) and toggle) { ; wait for start
-            tt("Waiting for game...")
-            color := colorHere(1020, 760)
-            Sleep InputDelay
-        }
-                                                ; STEP 1.3: PLACING TOWERS
-        clickHere(1020, 760)                    ; click start
-        clickHere(10, 10)
-        Sleep 2*TransitionDelay
-        tt("Placing towers...")
-        if (Strategy="Heli") {
-            press("b")                            ; place heli
-            clickHere(1560, 575)
-            clickHere(1560, 575)
-            pressStream(",,,..")
-            clickHere(0, 0)
-            press("z")                             ; place sniper
-            clickHere(835, 330)
-            clickHere(835, 330)
-            pressStream(",,////")
-            press("{Tab}")
-            press("{Tab}")
-            press("{Tab}")
-            clickHere(0, 0)
-            press("b")                            ; place heli
-            clickHere(110, 575)
-            clickHere(110, 575)
-            pressStream(",,,..")
-            clickHere(0, 0)
-            press()                                ; place target monkey
-            if (WaterMonkeyTarget) {
-                clickHere(482, 867)
-                clickHere(482, 867)
+startFarming: ; Renamed label
+Gosub updateScreenCoordinates
+isScriptRunning := true
+currentRunStartTime := A_TickCount
+while (isScriptRunning) {
+
+    if (currentScriptState = STATE_MENU_NAV) {
+        Hotkey, ^m, Off ; Disable menu hotkey during automation
+        updateTooltip("Navigating menus: Play -> Expert -> Infernal -> Easy -> Deflation")
+        clickAt(953, 983)                        ; click play
+        Sleep screenTransitionDelayMs
+        clickAt(1340, 975)                    ; click expert maps
+        Sleep screenTransitionDelayMs
+        clickAt(1460, 580)                    ; click infernal
+        Sleep screenTransitionDelayMs
+        clickAt(625, 400)                        ; click easy
+        Sleep screenTransitionDelayMs
+        clickAt(1290, 445)                    ; click deflation
+        Sleep screenTransitionDelayMs
+        clickAt(1100, 720)                    ; try and click overwrite save (if present)
+
+        ; Wait for map to load (check for green start button)
+        mapLoadStartTime := A_TickCount
+        mapLoaded := false
+        while (isScriptRunning and !mapLoaded and (A_TickCount - mapLoadStartTime < 10000)) { ; 10 sec timeout
+            updateTooltip("Waiting for map load (Infernal)...")
+            startButtonColor := getColorAt(1020, 760)
+            if (isNearColor(startButtonColor, 0x00e15d)) { ; Green color BGR
+                mapLoaded := true
             } else {
-                clickHere(835, 745)
-                clickHere(835, 745)
+                Sleep actionDelayMs
             }
         }
-        if (Strategy="Sniper") {
-            press("k")                          ; place village
-            clickHere(1575, 500)
-            clickHere(1575, 500)
-            pressStream(",,//")
-            clickHere(0, 0)
-            press("z")                          ; place sniper
-            clickHere(1550, 585)
-            clickHere(1550, 585)
-            pressStream("..////")
-            clickHere(0, 0)
-            press("f")                          ; place alchemist
-            clickHere(1575, 650)
-            clickHere(1575, 650)
-            pressStream(",,,/")
-            clickHere(0, 0)
-            press()                                ; place target monkey
-            if (WaterMonkeyTarget) {
-                clickHere(482, 867)
-                clickHere(482, 867)
+
+        if (!mapLoaded) {
+             updateTooltip("Map load timed out! Stopping.")
+             Gosub stopFarming ; Stop if map doesn't load
+             continue ; Skip rest of loop iteration
+        }
+
+        ; Place Towers
+        clickAt(1020, 760)                    ; click start button
+        clickAt(10, 10)                       ; Click away to ensure nothing selected
+        Sleep 2*screenTransitionDelayMs
+        updateTooltip("Placing towers (" . selectedStrategy . " strategy)...")
+
+        if (selectedStrategy="Heli") {
+            pressKey("b")                            ; place heli 1
+            clickAt(1560, 575)
+            clickAt(1560, 575)
+            pressKeyStream(",,,..")                ; Upgrades 003, 002
+            clickAt(0, 0)                          ; Click away
+            pressKey("z")                             ; place sniper
+            clickAt(835, 330)
+            clickAt(835, 330)
+            pressKeyStream(",,////")               ; Upgrades 024
+            pressKey("{Tab}")                      ; Target Strong
+            pressKey("{Tab}")
+            pressKey("{Tab}")
+            clickAt(0, 0)                          ; Click away
+            pressKey("b")                            ; place heli 2
+            clickAt(110, 575)
+            clickAt(110, 575)
+            pressKeyStream(",,,..")                ; Upgrades 003, 002
+            clickAt(0, 0)                          ; Click away
+            pressKey()                             ; place target monkey (hotkey from variable)
+            if (isTargetMonkeyWaterBased) {
+                clickAt(482, 867)                  ; Water placement
+                clickAt(482, 867)
             } else {
-                clickHere(110, 560)
-                clickHere(110, 560)
+                clickAt(835, 745)                  ; Land placement
+                clickAt(835, 745)
             }
         }
-        pressStream(",./,./,./,./,./,./")
-        Sleep TransitionDelay
-        clickHere(84, 94) ; close upgrade screen
-        clickHere(30, 0)
-        press("{Space}")                        ; start
-        press("{Space}")                        ; speed up
-        if (toggle) {
-            step := 2
+        else if (selectedStrategy="Sniper") {
+            pressKey("k")                          ; place village
+            clickAt(1575, 500)
+            clickAt(1575, 500)
+            pressKeyStream(",,//")                 ; Upgrades 002
+            clickAt(0, 0)                          ; Click away
+            pressKey("z")                          ; place sniper
+            clickAt(1550, 585)
+            clickAt(1550, 585)
+            pressKeyStream("..////")               ; Upgrades 204
+            clickAt(0, 0)                          ; Click away
+            pressKey("f")                          ; place alchemist
+            clickAt(1575, 650)
+            clickAt(1575, 650)
+            pressKeyStream(",,,/")                 ; Upgrades 301
+            clickAt(0, 0)                          ; Click away
+            pressKey()                             ; place target monkey (hotkey from variable)
+            if (isTargetMonkeyWaterBased) {
+                clickAt(482, 867)                  ; Water placement
+                clickAt(482, 867)
+            } else {
+                clickAt(110, 560)                  ; Land placement
+                clickAt(110, 560)
+            }
         }
-        Hotkey, ^m, On
+
+        ; Upgrade target monkey (assuming it's the last placed)
+        updateTooltip("Upgrading target monkey (" . selectedTargetMonkey . ")...")
+        pressKeyStream(",./,./,./,./,./,./") ; Example: 6 upgrades (adjust as needed)
+        Sleep screenTransitionDelayMs
+
+        ; Check if the upgrade screen is open and close it
+        upgradePanelColor := getColorAt(1134, 68)
+        if (isNearColor(upgradePanelColor, 0x548CB9)) { ; Check for brown panel color (B98C54 RGB -> 548CB9 BGR)
+             clickAt(84, 94) ; close upgrade screen
+        }
+
+        clickAt(30, 0)                         ; Click away
+        updateTooltip("Starting round...")
+        pressKey("{Space}")                    ; start round
+        pressKey("{Space}")                    ; speed up
+        currentScriptState := STATE_IN_GAME    ; Move to in-game state
+        Hotkey, ^m, On                         ; Re-enable menu hotkey
     }
-    if (step=2) {                                ; STEP 2: WAIT FOR STATE CHANGE
-        color := 0
-        checking := 1
-        while (checking and toggle and !menuOpen) {    ; wait for things to happen
-            tt("Waiting for end...")
-            color := colorHere(1030, 900)         ; check for victory stats's next button
-            if (nearColor(color, 0x00e76e)) {
-                Hotkey, ^m, Off
-                tt("victory!")
-                clickHere(1030, 900)
-                Sleep TransitionDelay
-                clickHere(700, 800)             ; home button
-                checking := 0
-                games := games + 1
-                step := 3
+
+    else if (currentScriptState = STATE_IN_GAME) {
+        baseTooltip := "Round in progress... Waiting for Victory/Defeat"
+        updateTooltip(baseTooltip)
+        isWaitingForGameStateChange := true
+
+        while (isWaitingForGameStateChange and isScriptRunning and !isMenuGuiOpen) {
+            ; Check for Victory first
+            victoryNextButtonColor := getColorAt(1030, 900)
+            if (isNearColor(victoryNextButtonColor, 0x00e76e)) { ; Green next button (6EE700 RGB -> 00E76E BGR)
+                updateTooltip("Victory detected!")
+                currentScriptState := STATE_POST_GAME_VICTORY
+                isWaitingForGameStateChange := false
+                break ; Exit inner while loop
             }
-            color := colorHere(925, 770)        ; check for defeat's restart button
-            if (nearColor(color, 0x00ddff)) {
-                tt("defeat")
-                clickHere(700, 800)             ; home button
-                checking := 0
-                step := 3
+
+            ; Check for Defeat
+            defeatRestartButtonColor := getColorAt(926, 771)
+            if (isNearColor(defeatRestartButtonColor, 0x00ddff)) { ; Light blue restart button (FFDD00 RGB -> 00DDFF BGR)
+                updateTooltip("Defeat detected!")
+                currentScriptState := STATE_POST_GAME_DEFEAT
+                isWaitingForGameStateChange := false
+                break ; Exit inner while loop
             }
-            color := colorHere(274, 987)        ; check for level up
-            if (nearColor(color, 0x194e9e)) {
-                Hotkey, ^m, Off
-                tt("lvl up!")
-                clickHere(30, 30)                 ; out of the way for level number
-                Sleep TransitionDelay
-                clickHere(30, 30)                 ; out of the way for knowledge
-                lvls := lvls + 1
-                Hotkey, ^m, On
+
+            ; REMOVE THIS OLD LEVEL UP CHECK BLOCK (Lines 435-445 approx)
+            ; levelUpColor1 := getColorAt(967, 375)       ; Blueish
+            ; levelUpColor2 := getColorAt(134, 846)       ; Brownish
+            ; levelUpColor3 := getColorAt(820, 587)       ; White
+            ; if (isNearColor(levelUpColor1, 0xDFCE06) or isNearColor(levelUpColor2, 0x2151A3) or isNearColor(levelUpColor3, 0xFFFFFF)) {
+            ;     ; Level up detected - dismiss popups but stay in STATE_IN_GAME
+            ;     Hotkey, ^m, Off ; Temporarily disable menu during clicks
+            ;     updateTooltip("Level Up detected! Dismissing popups...")
+            ;     clickAt(30, 30)                 ; Click away for level number popup
+            ;     Sleep screenTransitionDelayMs
+            ;     clickAt(30, 30)                 ; Click away for knowledge popup
+            ;     levelUpsCount := levelUpsCount + 1
+            ;     Hotkey, ^m, On ; Re-enable menu
+            ;     updateTooltip(baseTooltip) ; Restore original tooltip after dismissing
+            ;     ; Don't set isWaitingForGameStateChange to false, continue checking for win/loss
+            ; }
+
+            ; KEEP THIS NEW LEVEL UP CHECK BLOCK
+            ; Check for Level Up (can happen mid-round) - Requires all points to match
+            levelUpCheck1 := getColorAt(124, 1014) ; White text/element
+            levelUpCheck2 := getColorAt(142, 921) ; Brownish banner element
+            levelUpCheck3 := getColorAt(239, 827) ; Yellowish banner element
+            levelUpCheck4 := getColorAt(958, 495) ; Blueish popup background
+
+            ; Store results of color checks in intermediate variables
+            isColor1Match := isNearColor(levelUpCheck1, 0xFFFFFF)  ; White (FFFFFF RGB -> FFFFFF BGR)
+            isColor2Match := isNearColor(levelUpCheck2, 0x2152A4)  ; Brownish (A45221 RGB -> 2152A4 BGR)
+            isColor3Match := isNearColor(levelUpCheck3, 0x1DD0FF)  ; Yellowish (FFD01D RGB -> 1DD0FF BGR)
+            isColor4Match := isNearColor(levelUpCheck4, 0xE0CE00)  ; Blueish (00CEE0 RGB -> E0CE00 BGR)
+
+            if (isColor1Match and isColor2Match and isColor3Match and isColor4Match)
+            {
+                ; Level up detected - dismiss popups but stay in STATE_IN_GAME
+                Hotkey, ^m, Off ; Temporarily disable menu during clicks
+                updateTooltip("Level Up detected! Dismissing popups...")
+                clickAt(30, 30)                 ; Click away for level number popup
+                Sleep screenTransitionDelayMs
+                clickAt(30, 30)                 ; Click away for knowledge popup
+                levelUpsCount := levelUpsCount + 1
+                Hotkey, ^m, On ; Re-enable menu
+                updateTooltip(baseTooltip) ; Restore original tooltip after dismissing
+                ; Don't set isWaitingForGameStateChange to false, continue checking for win/loss
             }
-            Sleep InputDelay
+
+            Sleep actionDelayMs ; Wait a bit before checking again
         }
-        if (step=3) {                           ; STEP 3: LOAD HOME SCREEN
-            color := 0
-            step3StartTime := A_TickCount
-            setStepTo1 := true
-            while (!nearColor(color, 0x00E5FF) and toggle and !menuOpen) {    ; wait for home screen
-                tt("Waiting for menu...")
-                color := colorHere(737, 863)
-                Sleep InputDelay
-                if (A_TickCount - step3StartTime > 5000) {
-                    step := 2
-                    setStepTo1 := false 
-                    break ; go back to step 2 if we failed to get to home screen for over 5 seconds
-                }
+        ; If the loop exited because isScriptRunning became false or menu opened, the outer loop will handle it.
+    }
+
+    else if (currentScriptState = STATE_POST_GAME_VICTORY) {
+        Hotkey, ^m, Off ; Disable menu hotkey during automation
+        updateTooltip("Processing Victory: Clicking Next -> Home")
+        clickAt(1030, 900)             ; Click Next button
+        Sleep screenTransitionDelayMs
+        clickAt(700, 800)              ; Click Home button
+        completedGamesCount := completedGamesCount + 1
+        currentScriptState := STATE_WAIT_HOME ; Move to wait for home screen state
+        Hotkey, ^m, On ; Re-enable menu hotkey
+    }
+
+    else if (currentScriptState = STATE_POST_GAME_DEFEAT) {
+        Hotkey, ^m, Off ; Disable menu hotkey during automation
+        updateTooltip("Processing Defeat: Clicking Home")
+        ; No 'Next' button on defeat, just click Home
+        clickAt(700, 800)              ; Click Home button
+        ; Maybe add a small delay or check if home was clicked successfully?
+        Sleep 2 * screenTransitionDelayMs ; Increased delay to allow menu transition
+        currentScriptState := STATE_WAIT_HOME ; Move to wait for home screen state
+        Hotkey, ^m, On ; Re-enable menu hotkey
+    }
+
+     else if (currentScriptState = STATE_WAIT_HOME) {
+        updateTooltip("Returning to Main Menu...")
+        homeScreenWaitStartTime := A_TickCount
+        homeScreenLoaded := false
+        playButtonVisible := false
+        while (!homeScreenLoaded and isScriptRunning and !isMenuGuiOpen and (A_TickCount - homeScreenWaitStartTime < 5000)) { ; 5 sec timeout
+            ; Check only for the specific Play button color
+            playButtonColor := getColorAt(965, 899) ; Check for Play button green
+
+            if (isNearColor(playButtonColor, 0x00F066)) { ; (66F000 RGB -> 00F066 BGR)
+                homeScreenLoaded := true
+            } else {
+                Sleep actionDelayMs
             }
-            if (setStepTo1) {
-                step := 1
-            }
+        }
+
+        if (homeScreenLoaded) {
+            updateTooltip("Main Menu loaded. Starting next cycle.")
+            currentScriptState := STATE_MENU_NAV ; Go back to start the next cycle
+        } else {
+            updateTooltip("Failed to detect Main Menu/Play Button, stopping.")
+            ; Consider alternative recovery? For now, just stop.
+            ; Maybe try clicking home again? currentScriptState := STATE_POST_GAME_DEFEAT;
+            Gosub stopFarming
         }
     }
+
+    ; Add a small sleep in the main loop if needed, though sleeps exist within states
+    ; Sleep 10
 }
+
+; Script ends or was stopped
+updateTooltip("Script stopped.")
+Hotkey, ^m, On ; Ensure menu hotkey is on when script isn't running
 return
+
+; --- End of Script ---
